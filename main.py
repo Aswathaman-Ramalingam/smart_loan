@@ -1,53 +1,76 @@
 import streamlit as st
-from config import TEST_IMAGES
-from modules import ocr_engine, field_extractor, validator
+from PIL import Image
+import os
+import json
+from modules.ocr_engine import extract_text_from_image
+from modules.preprocessor import extract_data_using_template
+from modules.validator import regex_validate
 
-st.set_page_config(page_title="Smart Loan OCR", layout="wide")
-st.title("Smart Personal Loan Document OCR")
+TEMPLATES = {
+    "Aadhaar Card": {
+        "Name": (150, 150, 400, 30),
+        "ID": (150, 300, 400, 50),
+        "Address": (400, 350, 600, 10),
+    },
+    "Bank Statement": {
+        "Name": (50, 100, 300, 30),
+        "Address": (50, 120, 300, 60),
+        "Withdrawals": (300, 475, 200, 50),
+    },
+    "PAN Card": {
+        "Name": (12, 80, 200, 50),
+        "ID": (10, 220, 400, 60),
+    }
+}
 
-# Dropdown to select the test image
-st.subheader("Select a Test Image")
-selected_image = st.selectbox("Choose a sample image", TEST_IMAGES)
+st.title("Document Data Extraction Tool")
 
-# Upload option
-st.subheader("Or, Upload Your Document")
-uploaded_file = st.file_uploader("Upload a personal loan document (image)", type=["jpg", "png", "jpeg"])
+mode = st.radio("Select Mode", ["Test Images", "Upload Image"])
 
-if uploaded_file:
-    # Save uploaded file temporarily
-    with open("uploaded_temp.jpg", "wb") as f:
-        f.write(uploaded_file.read())
+image = None
 
-    st.image("uploaded_temp.jpg", caption="Uploaded Document", use_container_width=True)
+if mode == "Test Images":
+    test_images = {
+        "Aadhaar Card": "images/aadhar_card.jpg",
+        "Bank Statement": "images/bank_statement.png",
+        "PAN Card": "images/pan_card.jpg"
+    }
+    choice = st.selectbox("Choose Template", list(test_images.keys()))
+    image_path = test_images[choice]
+    image = Image.open(image_path)
 
-    if st.button("Process Uploaded Document"):
-        with st.spinner("Running OCR..."):
-            extracted_text, _ = ocr_engine.extract_text("uploaded_temp.jpg")
-            fields = field_extractor.extract_fields(extracted_text)
-            validations = validator.validate_fields(fields)
+else:
+    choice = st.selectbox("Choose Template for Uploaded Image", list(TEMPLATES.keys()))
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "png", "jpeg"])
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
 
-        st.subheader("Extracted Fields")
-        for key in fields:
-            st.text(f"{key}: {fields[key]}")
+if image is not None:
+    st.image(image, caption="Selected Document", use_container_width=True)
 
-        st.subheader("Validation Results")
-        for key in validations:
-            st.text(f"{key}: {validations[key]}")
+    text = extract_text_from_image(image)
+    extracted_data = extract_data_using_template(image, TEMPLATES[choice])
 
-elif selected_image:
-    # Show selected test image
-    st.image(selected_image, caption=selected_image.split('/')[-1], use_container_width=True)
+    st.subheader("Extracted Fields (Editable)")
+    edited_data = {}
+    for key, value in extracted_data.items():
+        edited_value = st.text_input(f"{key}", value)
+        edited_data[key] = edited_value
 
-    if st.button("Process Test Image"):
-        with st.spinner("Running OCR..."):
-            extracted_text, _ = ocr_engine.extract_text(selected_image)
-            fields = field_extractor.extract_fields(extracted_text)
-            validations = validator.validate_fields(fields)
+    st.subheader("Regex Validation")
+    validation = regex_validate(edited_data, choice)
+    st.json(validation)
 
-        st.subheader("Extracted Fields")
-        for key in fields:
-            st.text(f"{key}: {fields[key]}")
-
-        st.subheader("Validation Results")
-        for key in validations:
-            st.text(f"{key}: {validations[key]}")
+    st.subheader("Save Extracted Data")
+    filename = st.text_input("Save As (Enter filename without extension):", value=edited_data.get("Name", "document").replace(" ", "_"))
+    if st.button("Save JSON"):
+        if filename:
+            os.makedirs("saved_data", exist_ok=True)
+            save_path = f"saved_data/{filename}.json"
+            with open(save_path, "w") as f:
+                json.dump(edited_data, f, indent=4)
+            st.success(f"Data saved successfully as {save_path}")
+        else:
+            st.error("Filename cannot be empty.")
+else:
+    st.info("Please select or upload an image first.")
